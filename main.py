@@ -6,9 +6,9 @@ from dotenv import load_dotenv
 from utils import helpers
 from services import whatsapp
 
-load_dotenv()
-
 app = Flask(__name__)
+
+load_dotenv()
 
 @app.route('/welcome', methods=['GET'])
 def welcome():
@@ -110,4 +110,6 @@ def wsp_process_message(message: str, phone: str):
 
 if __name__ == '__main__':
     # app.run(debug=True)
-    app.run(debug=True, port=os.getenv('PORT', default=5000))
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+    
