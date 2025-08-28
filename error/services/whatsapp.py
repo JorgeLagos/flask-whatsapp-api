@@ -5,6 +5,8 @@ import os
 WSP_API_URL = os.getenv('WSP_API_URL')
 WSP_API_TOKEN = os.getenv('WSP_API_TOKEN')
 
+print(os.getenv('WSP_API_TOKEN'))
+
 def send_message(data: dict):
     try:
         response = requests.post(
