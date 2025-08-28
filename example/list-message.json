@@ -1,0 +1,45 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "456693322156626",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": null,
+              "phone_number_id": "6654935022611761"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "User Name"
+                },
+                "wa_id": "56933333333"
+              }
+            ],
+            "messages": [
+              {
+                "from": "56933333333",
+                "id": "wamid.HBgLNTE5NDM2NjI5NjQVAAPOOQUNCODUzN0U1QkU5MkZENTFBQwA=",
+                "timestamp": "1660362642",
+                "type": "interactive",
+                "text": null,
+                "interactive": {
+                  "type": "list_reply",
+                  "list_reply": {
+                    "id": "1",
+                    "title": "Buy",
+                    "description": "options"
+                  }
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}
