@@ -17,7 +17,7 @@ def welcome():
 @app.route('/whatsapp', methods=['GET'])
 def wsp_verify_token():
     try:
-        accessToken = 'ABC1234'
+        accessToken = os.getenv('WSP_API_VERIFY_TOKEN')
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
 
