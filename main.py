@@ -1,3 +1,5 @@
+import os
+
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 
@@ -107,4 +109,5 @@ def wsp_process_message(message: str, phone: str):
 #     whatsapp.send_message(data)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # app.run(debug=True)
+    app.run(debug=True, port=os.getenv('PORT', default=5000))
