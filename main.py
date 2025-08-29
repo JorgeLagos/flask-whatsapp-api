@@ -32,12 +32,15 @@ def wsp_verify_token():
 def wsp_received_message():
     try:
         body = request.get_json(silent=True) or {}
+        print(body)
 
         entry = (body.get('entry') or [{}])[0]
         changes = (entry.get('changes') or [{}])[0]
         value = changes.get('value', {})
         messages = (value.get('messages') or [{}])[0]
         phone = messages.get('from')
+
+        print(messages)
 
         text = helpers.get_text_user(messages)
         # wsp_send_message(text, phone)
@@ -108,6 +111,5 @@ def wsp_process_message(message: str, phone: str):
 #     whatsapp.send_message(data)
 
 if __name__ == '__main__':
-    # app.run(debug=True)
     port = int(os.environ.get('PORT', 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)
