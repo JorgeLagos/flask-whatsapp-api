@@ -2,6 +2,7 @@ import os
 
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+from config import MongoConnection, Config
 
 from utils import helpers
 from services import whatsapp
@@ -9,6 +10,7 @@ from services import whatsapp
 load_dotenv()
 
 app = Flask(__name__)
+mongo = MongoConnection()
 
 @app.route('/welcome', methods=['GET'])
 def welcome():
@@ -40,7 +42,13 @@ def wsp_received_message():
         messages = (value.get('messages') or [{}])[0]
         phone = messages.get('from')
 
-        print(messages)
+
+        buscar_rut('17167209-0')
+
+        print(phone, messages)
+
+        
+
 
         text = helpers.get_text_user(messages)
         # wsp_send_message(text, phone)
@@ -94,6 +102,60 @@ def wsp_process_message(message: str, phone: str):
 
     for item in listData:
         whatsapp.send_message(item)
+
+
+
+
+def buscar_rut(rut: str):
+    try:
+        if not rut:
+            return jsonify({
+                'success': False,
+                'error': 'RUT no proporcionado'
+            })
+        
+        collection = mongo.get_collection()
+        if collection is not None:
+            # Buscar la persona por RUT (búsqueda flexible)
+            persona = collection.find_one({
+                '$or': [
+                    {'rut': rut},
+                    {'rut': rut.replace('.', '').replace('-', '')},
+                    {'rut': {'$regex': rut.replace('.', '').replace('-', ''), '$options': 'i'}}
+                ]
+            })
+
+            print(persona)
+            
+            # if persona:
+            #     return jsonify({
+            #         'success': True,
+            #         'found': True,
+            #         'persona': {
+            #             'rut': persona.get('rut', ''),
+            #             'nombre': persona.get('nombre', '')
+            #         }
+            #     })
+            # else:
+            #     return jsonify({
+            #         'success': True,
+            #         'found': False,
+            #         'message': 'RUT no encontrado'
+            #     })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'No se pudo conectar a la base de datos'
+            })
+            
+    except Exception as e:
+        print(f"Error al buscar RUT: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Error interno del servidor'
+        })
+
+
 
 # def wsp_send_message(message: str, phone: str):
 #     message = message.lower()
