@@ -27,10 +27,10 @@ class MongoConnection:
                 self._db = None
     def get_database(self):
         return self._db
-    def get_collection(self, collection_name=None):
+    def get_collection(self, mongo_collection=None):
         if self._db is not None:
             try:
-                col_name = collection_name or Config.COLLECTION_NAME
+                col_name = mongo_collection or Config.MONGO_COLLECTION
                 collection = self._db[col_name]
                 # Verificar que la colección es accesible haciendo un ping simple
                 collection.find_one()
