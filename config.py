@@ -6,7 +6,6 @@ class Config:
     MONGO_URI = os.getenv('MONGO_URI')
     MONGO_DATABASE = os.getenv('MONGO_DATABASE', 'flask-wsp-api')
     MONGO_COLLECTION = os.getenv('MONGO_COLLECTION', 'users')
-    SECRET_KEY = os.getenv('SECRET_KEY')
 
 class MongoConnection:
     _instance = None
