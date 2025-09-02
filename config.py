@@ -2,11 +2,11 @@ from pymongo import MongoClient
 import os
 
 class Config:
-    # Configuración de MongoDB
-    MONGO_URI = 'mongodb+srv://ngonzalez:WfeNdw9ZTPsbowtK@flutter-test.ejdfgg6.mongodb.net/'
-    DATABASE_NAME = 'flutterdb'
-    COLLECTION_NAME = 'personas'
-    SECRET_KEY = 'tu-clave-secreta-aqui'
+    # Configuración de MongoDB - Leer desde variables de entorno
+    MONGO_URI = os.getenv('MONGO_URI')
+    MONGO_DATABASE = os.getenv('MONGO_DATABASE', 'flask-wsp-api')
+    MONGO_COLLECTION = os.getenv('MONGO_COLLECTION', 'users')
+    SECRET_KEY = os.getenv('SECRET_KEY')
 
 class MongoConnection:
     _instance = None
@@ -20,7 +20,7 @@ class MongoConnection:
         if self._client is None:
             try:
                 self._client = MongoClient(Config.MONGO_URI)
-                self._db = self._client[Config.DATABASE_NAME]
+                self._db = self._client[Config.MONGO_DATABASE]
                 print(":marca_de_verificación_blanca: Conexión a MongoDB establecida correctamente")
             except Exception as e:
                 print(f":x: Error al conectar a MongoDB: {e}")
