@@ -42,13 +42,8 @@ def wsp_received_message():
         messages = (value.get('messages') or [{}])[0]
         phone = messages.get('from')
 
-
-        buscar_rut('17167209-0')
-
+        print(messages)
         print(phone, messages)
-
-        
-
 
         text = helpers.get_text_user(messages)
         # wsp_send_message(text, phone)
@@ -75,13 +70,13 @@ def wsp_process_message(message: str, phone: str):
     if any(p in message for p in ['hi', 'hello', 'hola', 'buenas']):
         # Personalizar el saludo si se encontró el nombre
         if primer_nombre:
-            saludo = f'Hola {primer_nombre}, ¿Cómo estás?'
+            saludo = f'Hola {primer_nombre}, espero te encuentres bien.'
         else:
             saludo = 'Hola, ¿Cómo estás?'
         
         data = helpers.text_message(saludo, phone)
-        dataMenu = helpers.list_message(phone)
-        listData.extend([data, dataMenu])
+        dataMsg2 = helpers.text_message('Para continuar envíame la foto de tu cédula de identidad', phone)
+        listData.extend([data, dataMsg2])
 
     elif any(p in message for p in ['thanks', 'thank', 'thank you', 'gracias']):
         # Personalizar el agradecimiento si se encontró el nombre
@@ -166,54 +161,54 @@ def buscar_persona_por_telefono(phone: str):
         print(f"Error al buscar persona por teléfono: {e}")
         return None
 
-def buscar_rut(rut: str):
-    try:
-        if not rut:
-            return jsonify({
-                'success': False,
-                'error': 'RUT no proporcionado'
-            })
+# def buscar_rut(rut: str):
+#     try:
+#         if not rut:
+#             return jsonify({
+#                 'success': False,
+#                 'error': 'RUT no proporcionado'
+#             })
         
-        collection = mongo.get_collection()
-        if collection is not None:
-            # Buscar la persona por RUT (búsqueda flexible)
-            persona = collection.find_one({
-                '$or': [
-                    {'rut': rut},
-                    {'rut': rut.replace('.', '').replace('-', '')},
-                    {'rut': {'$regex': rut.replace('.', '').replace('-', ''), '$options': 'i'}}
-                ]
-            })
+#         collection = mongo.get_collection()
+#         if collection is not None:
+#             # Buscar la persona por RUT (búsqueda flexible)
+#             persona = collection.find_one({
+#                 '$or': [
+#                     {'rut': rut},
+#                     {'rut': rut.replace('.', '').replace('-', '')},
+#                     {'rut': {'$regex': rut.replace('.', '').replace('-', ''), '$options': 'i'}}
+#                 ]
+#             })
 
-            print(persona)
+#             print(persona)
             
-            # if persona:
-            #     return jsonify({
-            #         'success': True,
-            #         'found': True,
-            #         'persona': {
-            #             'rut': persona.get('rut', ''),
-            #             'nombre': persona.get('nombre', '')
-            #         }
-            #     })
-            # else:
-            #     return jsonify({
-            #         'success': True,
-            #         'found': False,
-            #         'message': 'RUT no encontrado'
-            #     })
-        else:
-            return jsonify({
-                'success': False,
-                'error': 'No se pudo conectar a la base de datos'
-            })
+#             # if persona:
+#             #     return jsonify({
+#             #         'success': True,
+#             #         'found': True,
+#             #         'persona': {
+#             #             'rut': persona.get('rut', ''),
+#             #             'nombre': persona.get('nombre', '')
+#             #         }
+#             #     })
+#             # else:
+#             #     return jsonify({
+#             #         'success': True,
+#             #         'found': False,
+#             #         'message': 'RUT no encontrado'
+#             #     })
+#         else:
+#             return jsonify({
+#                 'success': False,
+#                 'error': 'No se pudo conectar a la base de datos'
+#             })
             
-    except Exception as e:
-        print(f"Error al buscar RUT: {e}")
-        return jsonify({
-            'success': False,
-            'error': 'Error interno del servidor'
-        })
+#     except Exception as e:
+#         print(f"Error al buscar RUT: {e}")
+#         return jsonify({
+#             'success': False,
+#             'error': 'Error interno del servidor'
+#         })
 
 
 
