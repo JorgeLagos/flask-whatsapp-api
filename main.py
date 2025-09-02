@@ -62,13 +62,35 @@ def wsp_process_message(message: str, phone: str):
     message = message.lower()
     listData = []
 
+    # Buscar a la persona por número de teléfono para personalizar respuestas
+    persona = buscar_persona_por_telefono(phone)
+    nombre_usuario = persona.get('nombre', '') if persona else ''
+    
+    # Extraer solo el primer nombre si hay varios nombres
+    if nombre_usuario:
+        primer_nombre = nombre_usuario.split()[0]
+    else:
+        primer_nombre = ''
+
     if any(p in message for p in ['hi', 'hello', 'hola', 'buenas']):
-        data = helpers.text_message('Hola, ¿Como estas?', phone)
+        # Personalizar el saludo si se encontró el nombre
+        if primer_nombre:
+            saludo = f'Hola {primer_nombre}, ¿Cómo estás?'
+        else:
+            saludo = 'Hola, ¿Cómo estás?'
+        
+        data = helpers.text_message(saludo, phone)
         dataMenu = helpers.list_message(phone)
         listData.extend([data, dataMenu])
 
     elif any(p in message for p in ['thanks', 'thank', 'thank you', 'gracias']):
-        data = helpers.text_message('Gracias por contactarnos', phone)
+        # Personalizar el agradecimiento si se encontró el nombre
+        if primer_nombre:
+            agradecimiento = f'Gracias por contactarnos {primer_nombre}'
+        else:
+            agradecimiento = 'Gracias por contactarnos'
+        
+        data = helpers.text_message(agradecimiento, phone)
         listData.extend([data])
 
     elif any(p in message for p in ['agency']):
@@ -97,7 +119,13 @@ def wsp_process_message(message: str, phone: str):
         listData.extend([data])
 
     else:
-        data = helpers.text_message('Lo siento, no entiendo lo que me quieres decir', phone)
+        # Personalizar mensaje de error si se encontró el nombre
+        if primer_nombre:
+            mensaje_error = f'Lo siento {primer_nombre}, no entiendo lo que me quieres decir'
+        else:
+            mensaje_error = 'Lo siento, no entiendo lo que me quieres decir'
+        
+        data = helpers.text_message(mensaje_error, phone)
         listData.extend([data])
 
     for item in listData:
@@ -105,6 +133,38 @@ def wsp_process_message(message: str, phone: str):
 
 
 
+
+def buscar_persona_por_telefono(phone: str):
+    """
+    Busca una persona en la base de datos usando el número de teléfono
+    """
+    try:
+        if not phone:
+            return None
+        
+        collection = mongo.get_collection()
+        if collection is not None:
+            # Limpiar el número de teléfono para la búsqueda
+            phone_clean = phone.replace('+', '').replace('-', '').replace(' ', '')
+            
+            # Buscar la persona por número de teléfono (búsqueda flexible)
+            persona = collection.find_one({
+                '$or': [
+                    {'numero': phone},
+                    {'numero': phone_clean},
+                    {'numero': f'+{phone_clean}'},
+                    {'numero': {'$regex': phone_clean, '$options': 'i'}}
+                ]
+            })
+            
+            return persona
+        else:
+            print("No se pudo conectar a la base de datos")
+            return None
+            
+    except Exception as e:
+        print(f"Error al buscar persona por teléfono: {e}")
+        return None
 
 def buscar_rut(rut: str):
     try:
