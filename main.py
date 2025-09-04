@@ -79,6 +79,9 @@ def wsp_received_message():
                     data = {"phone": phone, "file": jsonDataFile}
                     insert_result = collection.insert_one(data)
                     inserted_id = insert_result.inserted_id
+
+                    wsp_process_message(text, phone)
+  
             status, file_data = whatsapp.get_file(wsp_file_id)
 
             if status and isinstance(file_data, dict) and collection is not None and inserted_id is not None:
@@ -130,38 +133,31 @@ def wsp_received_message():
                         ia_text = None
                         try:
                             if isinstance(saia_chat_result, dict):
-                                choices = saia_chat_result.get('choices')
-                                if isinstance(choices, list) and choices:
+                                choices = saia_chat_result.get('choices') or []
+                                if choices:
                                     choice0 = choices[0]
-                                    msg = None
-                                    if isinstance(choice0, dict):
-                                        msg = choice0.get('message') or choice0.get('delta') or choice0
+                                    msg = choice0.get('message') if isinstance(choice0, dict) else choice0
+                                    content = None
                                     if isinstance(msg, dict):
-                                        c = msg.get('content') or msg.get('text')
-                                        if isinstance(c, str) and c.strip():
-                                            ia_text = c
-                                    elif isinstance(msg, str) and msg.strip():
-                                        ia_text = msg
+                                        content = msg.get('content') or msg.get('text')
+                                    elif isinstance(msg, str):
+                                        content = msg
 
-                                # fallback: find first string
-                                if not ia_text:
-                                    def find_string(o):
-                                        if isinstance(o, str):
-                                            return o
-                                        if isinstance(o, list):
-                                            for vv in o:
-                                                s = find_string(vv)
-                                                if s:
-                                                    return s
-                                            return None
-                                        if isinstance(o, dict):
-                                            for vv in o.values():
-                                                s = find_string(vv)
-                                                if s:
-                                                    return s
-                                            return None
-                                        return None
-                                    ia_text = find_string(saia_chat_result)
+                                    if isinstance(content, str) and content.strip():
+                                        import re, json
+                                        candidate = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.DOTALL | re.IGNORECASE)
+                                        candidate = unicodedata.normalize('NFKC', candidate).strip()
+                                        try:
+                                            parsed = json.loads(candidate)
+                                            ia_text = parsed
+                                        except Exception:
+                                            ia_text = candidate
+
+                            # persist whichever form we have (dict/list or string)
+                            try:
+                                collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': ia_text}})
+                            except Exception:
+                                pass
                         except Exception:
                             ia_text = None
 
@@ -230,7 +226,7 @@ def wsp_received_message():
                         except Exception:
                             pass
 
-        # Enviar la respuesta de la IA como mensaje de WhatsApp al usuario
+    # Enviar la respuesta de la IA como mensaje de WhatsApp al usuario
         try:
             if ia_text is not None:
                 import json as _json
@@ -241,7 +237,7 @@ def wsp_received_message():
                 whatsapp.send_message(helpers.text_message(ia_msg, phone))
         except Exception as _e:
             print(f"No se pudo enviar ia_text por WhatsApp: {_e}")
-        wsp_process_message(text, phone)
+    # (do not call wsp_process_message here; acknowledgement was already sent at receive time)
         
         return 'EVENT_RECEIVED'
     except Exception as e:
