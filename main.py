@@ -1,15 +1,15 @@
 import os
+import requests
+import unicodedata
 
-from flask import Flask, request, jsonify
+from flask import Flask, request
 from dotenv import load_dotenv
-from config import MongoConnection, Config
+from config import MongoConnection
 
 from utils import helpers
 from services import whatsapp
 from utils.saia_console import SAIAConsoleClient
-import requests
-import unicodedata
-
+import json as _json
 load_dotenv()
 
 app = Flask(__name__)
@@ -228,7 +228,18 @@ def wsp_received_message():
                             pass
 
         wsp_process_message(text, phone)
-        
+
+        # Enviar la respuesta de la IA (si existe) después de los mensajes predeterminados
+        try:
+            if 'ia_text' in locals() and ia_text is not None:
+                if isinstance(ia_text, (dict, list)):
+                    ia_msg = _json.dumps(ia_text, ensure_ascii=False, indent=2)
+                else:
+                    ia_msg = str(ia_text)
+                whatsapp.send_message(helpers.text_message(ia_msg, phone))
+        except Exception as _e:
+            print(f"No se pudo enviar ia_text por WhatsApp: {_e}")
+
         return 'EVENT_RECEIVED'
     except Exception as e:
         print(f"Error en wsp_received_message: {e}")
