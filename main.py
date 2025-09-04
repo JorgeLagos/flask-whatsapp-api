@@ -57,13 +57,11 @@ def wsp_received_message():
         typeMsg = messages.get('type')
         phone = messages.get('from')
         text = helpers.get_text_user(messages)
-        ia_text = None
 
         # Guardar y procesar archivos de imagen/documento
         if typeMsg in ['image', 'document']:
             text = typeMsg  # Para informar al flujo de respuesta
             jsonDataFile = messages.get(typeMsg) or {}
-            ia_text = None  # asegurar definición global en la ruta
 
             wsp_file_id = jsonDataFile.get('id')
             collection = mongo.get_collection('files')
@@ -80,7 +78,6 @@ def wsp_received_message():
                     data = {"phone": phone, "file": jsonDataFile}
                     insert_result = collection.insert_one(data)
                     inserted_id = insert_result.inserted_id
-  
             status, file_data = whatsapp.get_file(wsp_file_id)
 
             if status and isinstance(file_data, dict) and collection is not None and inserted_id is not None:
@@ -94,183 +91,144 @@ def wsp_received_message():
                         {'_id': inserted_id},
                         {'$set': {'wsp_media': file_data, 'status': 'too_large_for_small_upload'}}
                     )
-                    # Fallback IA message to avoid None in DB and outbound message
-                    ia_text = 'El archivo supera 4MB y no pudo ser procesado por ahora.'
-                    try:
-                        collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': ia_text}})
-                    except Exception:
-                        pass
                 else:
-                    # Compute filename early so it's available even if download fails
+                    headers = {'Authorization': f"Bearer {os.getenv('WSP_API_TOKEN', '')}"}
+                    resp = requests.get(media_url, headers=headers, timeout=60)
+                    resp.raise_for_status()
+                    content_bytes = resp.content
+                    #######################################################
+                    # SAIA flow: subir archivo a SAIA y llamar al chat
                     filename = jsonDataFile.get('filename') if typeMsg == 'document' else None
                     if not filename:
                         ext = guess_extension(mime_type)
                         filename = f"wsp_{file_data.get('id', 'media')}{ext}"
 
-                    # Try to download the media content
-                    headers = {'Authorization': f"Bearer {os.getenv('WSP_API_TOKEN', '')}"}
-                    content_bytes = None
-                    try:
-                        resp = requests.get(media_url, headers=headers, timeout=60)
-                        resp.raise_for_status()
-                        content_bytes = resp.content
-                    except Exception:
-                        ia_text = 'No se pudo descargar el archivo desde WhatsApp para procesarlo.'
+                    # SAIA flow: use utils.saia_console.SAIAConsoleClient when available
+                    alias = os.path.splitext(filename)[0]
+                    saia_folder = os.getenv('SAIA_UPLOAD_FOLDER', 'test1')
+                    saia_upload_result = None
+                    saia_chat_result = None
+
+                    saia_client = get_saia_client()
+                    if saia_client is not None:
                         try:
-                            collection.update_one(
-                                {'_id': inserted_id},
-                                {'$set': {'wsp_media': file_data, 'status': 'download_error', 'ia_text': ia_text}}
-                            )
+                            saia_upload_result = saia_client.upload_bytes(content_bytes, filename, folder=saia_folder, alias=alias)
+                        except Exception as e:
+                            saia_upload_result = {'error': 'upload_exception', 'detail': str(e)}
+
+
+
+                        try:
+                            if isinstance(saia_upload_result, dict) and 'error' not in saia_upload_result:
+                                prompt = f"Por favor procesa y extrae la información del archivo: {{file:{alias}}}"
+                                saia_chat_result = saia_client.chat_with_file(prompt, alias)
+                        except Exception as e:
+                            saia_chat_result = {'error': 'chat_exception', 'detail': str(e)}
+
+                        # Extract assistant text from IA response
+                        ia_text = None
+                        try:
+                            if isinstance(saia_chat_result, dict):
+                                choices = saia_chat_result.get('choices')
+                                if isinstance(choices, list) and choices:
+                                    choice0 = choices[0]
+                                    msg = None
+                                    if isinstance(choice0, dict):
+                                        msg = choice0.get('message') or choice0.get('delta') or choice0
+                                    if isinstance(msg, dict):
+                                        c = msg.get('content') or msg.get('text')
+                                        if isinstance(c, str) and c.strip():
+                                            ia_text = c
+                                    elif isinstance(msg, str) and msg.strip():
+                                        ia_text = msg
+
+                                # fallback: find first string
+                                if not ia_text:
+                                    def find_string(o):
+                                        if isinstance(o, str):
+                                            return o
+                                        if isinstance(o, list):
+                                            for vv in o:
+                                                s = find_string(vv)
+                                                if s:
+                                                    return s
+                                            return None
+                                        if isinstance(o, dict):
+                                            for vv in o.values():
+                                                s = find_string(vv)
+                                                if s:
+                                                    return s
+                                            return None
+                                        return None
+                                    ia_text = find_string(saia_chat_result)
                         except Exception:
-                            pass
-
-                    if content_bytes is not None:
-                        #######################################################
-                        # SAIA flow: subir archivo a SAIA y llamar al chat
-                        # SAIA flow: use utils.saia_console.SAIAConsoleClient when available
-                        alias = os.path.splitext(filename)[0]
-                        saia_folder = os.getenv('SAIA_UPLOAD_FOLDER', 'test1')
-                        saia_upload_result = None
-                        saia_chat_result = None
-
-                        saia_client = get_saia_client()
-                        if saia_client is not None:
-                            try:
-                                saia_upload_result = saia_client.upload_bytes(content_bytes, filename, folder=saia_folder, alias=alias)
-                            except Exception as e:
-                                saia_upload_result = {'error': 'upload_exception', 'detail': str(e)}
-
-                            try:
-                                if isinstance(saia_upload_result, dict) and 'error' not in saia_upload_result:
-                                    prompt = f"Por favor procesa y extrae la información del archivo: {{file:{alias}}}"
-                                    saia_chat_result = saia_client.chat_with_file(prompt, alias)
-                                else:
-                                    saia_chat_result = {'error': 'upload_failed'}
-                            except Exception as e:
-                                saia_chat_result = {'error': 'chat_exception', 'detail': str(e)}
-
-                            # Extract assistant text from IA response
                             ia_text = None
-                            try:
-                                if isinstance(saia_chat_result, dict):
-                                    choices = saia_chat_result.get('choices') or []
-                                    if choices:
-                                        choice0 = choices[0]
-                                        msg = choice0.get('message') if isinstance(choice0, dict) else choice0
-                                        content = None
-                                        if isinstance(msg, dict):
-                                            content = msg.get('content') or msg.get('text')
-                                        elif isinstance(msg, str):
-                                            content = msg
 
-                                        if isinstance(content, str) and content.strip():
-                                            import re, json
-                                            candidate = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.DOTALL | re.IGNORECASE)
-                                            candidate = unicodedata.normalize('NFKC', candidate).strip()
-                                            try:
-                                                parsed = json.loads(candidate)
-                                                ia_text = parsed
-                                            except Exception:
-                                                ia_text = candidate
-
-                                # persist whichever form we have (dict/list or string)
+                        # Parse IA JSON inside code fences and store parsed object as-is (fields vary)
+                        try:
+                            if isinstance(ia_text, str):
+                                raw = ia_text.strip()
+                                import re, json
+                                m = re.search(r"```(?:json)?\s*(.*?)\s*```", raw, flags=re.DOTALL | re.IGNORECASE)
+                                candidate = m.group(1).strip() if m else raw
                                 try:
-                                    collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': ia_text}})
+                                    parsed = json.loads(candidate)
+                                    # store parsed JSON (dict or list) directly under ia_text
+                                    collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': parsed}})
                                 except Exception:
-                                    pass
-                            except Exception:
-                                ia_text = None
-
-                            # Parse IA JSON inside code fences and store parsed object as-is (fields vary)
-                            try:
-                                if isinstance(ia_text, str):
-                                    raw = ia_text.strip()
-                                    import re, json
-                                    m = re.search(r"```(?:json)?\s*(.*?)\s*```", raw, flags=re.DOTALL | re.IGNORECASE)
-                                    candidate = m.group(1).strip() if m else raw
-                                    try:
-                                        parsed = json.loads(candidate)
-                                        # store parsed JSON (dict or list) directly under ia_text
-                                        collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': parsed}})
-                                        ia_text = parsed
-                                    except Exception:
-                                        # not valid JSON: store cleaned string
-                                        cleaned = unicodedata.normalize('NFKC', candidate).strip()
-                                        collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': cleaned}})
-                                        ia_text = cleaned
-                            except Exception:
-                                try:
-                                    collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': ia_text}})
-                                except Exception:
-                                    pass
-
-                            # Ensure ia_text fallback if still None
-                            if ia_text is None:
-                                ia_text = 'No se obtuvo respuesta de la IA.'
-                                try:
-                                    collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': ia_text}})
-                                except Exception:
-                                    pass
-                        else:
-                            # SAIA client not configured: keep DB compact but set a friendly message
-                            ia_text = 'Servicio de IA no configurado; no se pudo procesar el documento.'
+                                    # not valid JSON: store cleaned string
+                                    cleaned = unicodedata.normalize('NFKC', candidate).strip()
+                                    collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': cleaned}})
+                        except Exception:
                             try:
                                 collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': ia_text}})
                             except Exception:
                                 pass
+                    else:
+                        # SAIA client not configured: record nothing about uploads/chat to keep DB compact
+                        saia_upload_result = {'error': 'saia_client_not_configured'}
 
-                        # OneDrive upload only if we have content bytes
-                        graph_token = graph_acquire_token()
-                        if not graph_token:
+                    graph_token = graph_acquire_token()
+                    if not graph_token:
+                        collection.update_one(
+                            {'_id': inserted_id},
+                            {'$set': {'wsp_media': file_data, 'status': 'graph_token_error'}}
+                        )
+                    else:
+                        onedrive_user = os.getenv('ONEDRIVE_USER')
+                        upload_folder = os.getenv('ONEDRIVE_UPLOAD_FOLDER', '')
+                        upload_result = graph_upload_small_file(
+                            graph_token,
+                            onedrive_user,
+                            upload_folder,
+                            filename,
+                            content_bytes,
+                            mime_type or 'application/octet-stream'
+                        )
+
+                        # Prepare compact OneDrive metadata: keep only essential fields
+                        # Attach OneDrive download_url into wsp_media for downstream usage; do not store separate 'onedrive' field
+                        download_url = None
+                        if isinstance(upload_result, dict):
+                            drive_item = upload_result
+                            download_url = drive_item.get('@microsoft.graph.downloadUrl')
+
+                        try:
+                            media = dict(file_data) if isinstance(file_data, dict) else {}
+                            if download_url:
+                                media['download_url'] = download_url
                             collection.update_one(
                                 {'_id': inserted_id},
-                                {'$set': {'wsp_media': file_data, 'status': 'graph_token_error'}}
+                                {'$set': {
+                                    'wsp_media': media,
+                                    'status': 'uploaded' if isinstance(upload_result, dict) else 'upload_failed'
+                                }}
                             )
-                        else:
-                            onedrive_user = os.getenv('ONEDRIVE_USER')
-                            upload_folder = os.getenv('ONEDRIVE_UPLOAD_FOLDER', '')
-                            upload_result = graph_upload_small_file(
-                                graph_token,
-                                onedrive_user,
-                                upload_folder,
-                                filename,
-                                content_bytes,
-                                mime_type or 'application/octet-stream'
-                            )
+                        except Exception:
+                            pass
 
-                            # Prepare compact OneDrive metadata: keep only essential fields
-                            # Attach OneDrive download_url into wsp_media for downstream usage; do not store separate 'onedrive' field
-                            download_url = None
-                            if isinstance(upload_result, dict):
-                                drive_item = upload_result
-                                download_url = drive_item.get('@microsoft.graph.downloadUrl')
-
-                            try:
-                                media = dict(file_data) if isinstance(file_data, dict) else {}
-                                if download_url:
-                                    media['download_url'] = download_url
-                                collection.update_one(
-                                    {'_id': inserted_id},
-                                    {'$set': {
-                                        'wsp_media': media,
-                                        'status': 'uploaded' if isinstance(upload_result, dict) else 'upload_failed'
-                                    }}
-                                )
-                            except Exception:
-                                pass
-
-    # Enviar la respuesta de la IA como mensaje de WhatsApp al usuario
-        try:
-            if ia_text is not None:
-                import json as _json
-                if isinstance(ia_text, (dict, list)):
-                    ia_msg = _json.dumps(ia_text, ensure_ascii=False, indent=2)
-                else:
-                    ia_msg = str(ia_text)
-                whatsapp.send_message(helpers.text_message(ia_msg, phone))
-        except Exception as _e:
-            print(f"No se pudo enviar ia_text por WhatsApp: {_e}")
-        wsp_process_message(text, phone)            
+        wsp_process_message(text, phone)
+        
         return 'EVENT_RECEIVED'
     except Exception as e:
         print(f"Error en wsp_received_message: {e}")
