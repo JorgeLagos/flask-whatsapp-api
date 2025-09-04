@@ -62,6 +62,7 @@ def wsp_received_message():
         if typeMsg in ['image', 'document']:
             text = typeMsg  # Para informar al flujo de respuesta
             jsonDataFile = messages.get(typeMsg) or {}
+            ia_text = None  # asegurar definición global en la ruta
 
             wsp_file_id = jsonDataFile.get('id')
             collection = mongo.get_collection('files')
@@ -175,10 +176,12 @@ def wsp_received_message():
                                     parsed = json.loads(candidate)
                                     # store parsed JSON (dict or list) directly under ia_text
                                     collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': parsed}})
+                                    ia_text = parsed
                                 except Exception:
                                     # not valid JSON: store cleaned string
                                     cleaned = unicodedata.normalize('NFKC', candidate).strip()
                                     collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': cleaned}})
+                                    ia_text = cleaned
                         except Exception:
                             try:
                                 collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': ia_text}})
@@ -227,7 +230,17 @@ def wsp_received_message():
                         except Exception:
                             pass
 
-        print(ia_text)
+        # Enviar la respuesta de la IA como mensaje de WhatsApp al usuario
+        try:
+            if ia_text is not None:
+                import json as _json
+                if isinstance(ia_text, (dict, list)):
+                    ia_msg = _json.dumps(ia_text, ensure_ascii=False, indent=2)
+                else:
+                    ia_msg = str(ia_text)
+                whatsapp.send_message(helpers.text_message(ia_msg, phone))
+        except Exception as _e:
+            print(f"No se pudo enviar ia_text por WhatsApp: {_e}")
         wsp_process_message(text, phone)
         
         return 'EVENT_RECEIVED'
