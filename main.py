@@ -8,6 +8,7 @@ from utils import helpers
 from services import whatsapp
 from utils.saia_console import SAIAConsoleClient
 import requests
+import unicodedata
 
 load_dotenv()
 
@@ -62,14 +63,21 @@ def wsp_received_message():
             text = typeMsg  # Para informar al flujo de respuesta
             jsonDataFile = messages.get(typeMsg) or {}
 
-            data = {"phone": phone, "file": jsonDataFile}
+            wsp_file_id = jsonDataFile.get('id')
             collection = mongo.get_collection('files')
             inserted_id = None
             if collection is not None:
-                insert_result = collection.insert_one(data)
-                inserted_id = insert_result.inserted_id
-
-            wsp_file_id = jsonDataFile.get('id')
+                # Avoid duplicate inserts: try to find existing document by WhatsApp file id
+                try:
+                    existing = collection.find_one({'file.id': wsp_file_id})
+                except Exception:
+                    existing = None
+                if existing:
+                    inserted_id = existing.get('_id')
+                else:
+                    data = {"phone": phone, "file": jsonDataFile}
+                    insert_result = collection.insert_one(data)
+                    inserted_id = insert_result.inserted_id
             status, file_data = whatsapp.get_file(wsp_file_id)
 
             if status and isinstance(file_data, dict) and collection is not None and inserted_id is not None:
@@ -108,9 +116,19 @@ def wsp_received_message():
                         except Exception as e:
                             saia_upload_result = {'error': 'upload_exception', 'detail': str(e)}
 
-                        # persist upload result
+                        # persist compact upload summary to avoid storing large raw objects
+                        compact_upload = None
                         try:
-                            collection.update_one({'_id': inserted_id}, {'$set': {'saia_upload': saia_upload_result}})
+                            if isinstance(saia_upload_result, dict):
+                                compact_upload = {
+                                    'file_alias': saia_upload_result.get('file_alias_used') or alias,
+                                    'id': saia_upload_result.get('id') or saia_upload_result.get('fileId') or saia_upload_result.get('file_id'),
+                                    'status_code': saia_upload_result.get('status_code')
+                                }
+                        except Exception:
+                            compact_upload = None
+                        try:
+                            collection.update_one({'_id': inserted_id}, {'$set': {'saia_upload': compact_upload}})
                         except Exception:
                             pass
 
@@ -121,45 +139,60 @@ def wsp_received_message():
                         except Exception as e:
                             saia_chat_result = {'error': 'chat_exception', 'detail': str(e)}
 
-                        # extract readable text if present
+                        # extract assistant text directly from choices[0].message.content
                         saia_text = None
+                        compact_chat = None
                         try:
                             if isinstance(saia_chat_result, dict):
-                                # try common shapes: {'message': '...'} or raw dict
-                                if 'message' in saia_chat_result and isinstance(saia_chat_result.get('message'), str):
-                                    saia_text = saia_chat_result.get('message')
-                                else:
-                                    # fallback: stringify a likely textual field
-                                    # prioritize 'answer', 'text', or join first strings
-                                    for key in ('answer', 'text'):
-                                        v = saia_chat_result.get(key)
-                                        if isinstance(v, str) and v.strip():
-                                            saia_text = v
-                                            break
-                                    if saia_text is None:
-                                        # try to find a string inside the nested response
-                                        def find_string(o):
-                                            if isinstance(o, str):
-                                                return o
-                                            if isinstance(o, list):
-                                                for vv in o:
-                                                    s = find_string(vv)
-                                                    if s:
-                                                        return s
-                                                return None
-                                            if isinstance(o, dict):
-                                                for vv in o.values():
-                                                    s = find_string(vv)
-                                                    if s:
-                                                        return s
-                                                return None
+                                compact_chat = {
+                                    'id': saia_chat_result.get('id'),
+                                    'model': saia_chat_result.get('model'),
+                                    'created': saia_chat_result.get('created')
+                                }
+                                choices = saia_chat_result.get('choices')
+                                if isinstance(choices, list) and len(choices) > 0:
+                                    choice0 = choices[0]
+                                    if isinstance(choice0, dict):
+                                        msg = choice0.get('message') or choice0.get('delta') or choice0
+                                        if isinstance(msg, dict):
+                                            c = msg.get('content') or msg.get('text')
+                                            if isinstance(c, str) and c.strip():
+                                                saia_text = c
+                                        elif isinstance(msg, str) and msg.strip():
+                                            saia_text = msg
+
+                                # fallback: find first string inside response
+                                if not saia_text:
+                                    def find_string(o):
+                                        if isinstance(o, str):
+                                            return o
+                                        if isinstance(o, list):
+                                            for vv in o:
+                                                s = find_string(vv)
+                                                if s:
+                                                    return s
                                             return None
-                                        saia_text = find_string(saia_chat_result)
+                                        if isinstance(o, dict):
+                                            for vv in o.values():
+                                                s = find_string(vv)
+                                                if s:
+                                                    return s
+                                            return None
+                                        return None
+
+                                    saia_text = find_string(saia_chat_result)
                         except Exception:
                             saia_text = None
 
+                        # normalize and trim the assistant text
                         try:
-                            collection.update_one({'_id': inserted_id}, {'$set': {'saia_chat': saia_chat_result, 'saia_text': saia_text}})
+                            if isinstance(saia_text, str):
+                                saia_text = unicodedata.normalize('NFKC', saia_text).strip()
+                        except Exception:
+                            pass
+
+                        try:
+                            collection.update_one({'_id': inserted_id}, {'$set': {'saia_chat': compact_chat, 'saia_text': saia_text}})
                         except Exception:
                             pass
                     else:
@@ -187,15 +220,17 @@ def wsp_received_message():
                             mime_type or 'application/octet-stream'
                         )
 
-                        # Prepare onedrive metadata: include download url and create a share link
+                        # Prepare compact OneDrive metadata: keep only essential fields
                         onedrive_meta = None
                         if isinstance(upload_result, dict):
-                            download_url = upload_result.get('@microsoft.graph.downloadUrl')
                             drive_item = upload_result
-                            # Try to create a shareable link (anonymous view). If tenant blocks anonymous links, this will fail.
-                            share_link = graph_create_share_link(graph_token, onedrive_user, drive_item.get('id'))
+                            download_url = drive_item.get('@microsoft.graph.downloadUrl')
+                            item_id = drive_item.get('id')
+                            share_link = graph_create_share_link(graph_token, onedrive_user, item_id)
                             onedrive_meta = {
-                                'drive_item': drive_item,
+                                'id': item_id,
+                                'name': drive_item.get('name'),
+                                'size': drive_item.get('size'),
                                 'download_url': download_url,
                                 'share_link': share_link
                             }
