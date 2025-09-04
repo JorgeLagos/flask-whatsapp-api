@@ -57,6 +57,7 @@ def wsp_received_message():
         typeMsg = messages.get('type')
         phone = messages.get('from')
         text = helpers.get_text_user(messages)
+        ia_text = None
 
         # Guardar y procesar archivos de imagen/documento
         if typeMsg in ['image', 'document']:
@@ -79,8 +80,6 @@ def wsp_received_message():
                     data = {"phone": phone, "file": jsonDataFile}
                     insert_result = collection.insert_one(data)
                     inserted_id = insert_result.inserted_id
-
-                    wsp_process_message(text, phone)
   
             status, file_data = whatsapp.get_file(wsp_file_id)
 
@@ -237,8 +236,7 @@ def wsp_received_message():
                 whatsapp.send_message(helpers.text_message(ia_msg, phone))
         except Exception as _e:
             print(f"No se pudo enviar ia_text por WhatsApp: {_e}")
-    # (do not call wsp_process_message here; acknowledgement was already sent at receive time)
-        
+        wsp_process_message(text, phone)            
         return 'EVENT_RECEIVED'
     except Exception as e:
         print(f"Error en wsp_received_message: {e}")
