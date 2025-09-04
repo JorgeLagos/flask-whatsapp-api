@@ -6,6 +6,7 @@ from config import MongoConnection, Config
 
 from utils import helpers
 from services import whatsapp
+import requests
 
 load_dotenv()
 
@@ -34,8 +35,6 @@ def wsp_verify_token():
 def wsp_received_message():
     try:
         body = request.get_json(silent=True) or {}
-        # print(body)
-
         entry = (body.get('entry') or [{}])[0]
         changes = (entry.get('changes') or [{}])[0]
         value = changes.get('value', {})
@@ -43,39 +42,149 @@ def wsp_received_message():
 
         typeMsg = messages.get('type')
         phone = messages.get('from')
-
         text = helpers.get_text_user(messages)
 
-
-
-        # Save jsonDataFile mongo
-        jsonDataFile = None
+        # Guardar y procesar archivos de imagen/documento
         if typeMsg in ['image', 'document']:
+            text = typeMsg  # Para informar al flujo de respuesta
+            jsonDataFile = messages.get(typeMsg) or {}
 
-            text = typeMsg
-
-            jsonDataFile = messages.get(typeMsg)
-            
-            data = {
-                "phone": phone,
-                "file": jsonDataFile
-            }
-
+            data = {"phone": phone, "file": jsonDataFile}
             collection = mongo.get_collection('files')
-            collection.insert_one(data)
+            inserted_id = None
+            if collection is not None:
+                insert_result = collection.insert_one(data)
+                inserted_id = insert_result.inserted_id
 
             wsp_file_id = jsonDataFile.get('id')
             status, file_data = whatsapp.get_file(wsp_file_id)
 
+            if status and isinstance(file_data, dict) and collection is not None and inserted_id is not None:
+                media_url = file_data.get('url')
+                mime_type = file_data.get('mime_type')
+                file_size = file_data.get('file_size')
+
+                # Solo small upload (<= 4MB)
+                if file_size and file_size > 4 * 1024 * 1024:
+                    collection.update_one(
+                        {'_id': inserted_id},
+                        {'$set': {'wsp_media': file_data, 'status': 'too_large_for_small_upload'}}
+                    )
+                else:
+                    headers = {'Authorization': f"Bearer {os.getenv('WSP_API_TOKEN', '')}"}
+                    resp = requests.get(media_url, headers=headers, timeout=60)
+                    resp.raise_for_status()
+                    content_bytes = resp.content
+
+                    # LOGICA PARA ENVIAR ARCHIVO A AGENTE EN GENEXUS (SAIA.CONSOLE)
+
+                    filename = jsonDataFile.get('filename') if typeMsg == 'document' else None
+                    if not filename:
+                        ext = guess_extension(mime_type)
+                        filename = f"wsp_{file_data.get('id', 'media')}{ext}"
+
+                    graph_token = graph_acquire_token()
+                    if not graph_token:
+                        collection.update_one(
+                            {'_id': inserted_id},
+                            {'$set': {'wsp_media': file_data, 'status': 'graph_token_error'}}
+                        )
+                    else:
+                        onedrive_user = os.getenv('ONEDRIVE_USER')
+                        upload_folder = os.getenv('ONEDRIVE_UPLOAD_FOLDER', '')
+                        upload_result = graph_upload_small_file(
+                            graph_token,
+                            onedrive_user,
+                            upload_folder,
+                            filename,
+                            content_bytes,
+                            mime_type or 'application/octet-stream'
+                        )
+
+                        collection.update_one(
+                            {'_id': inserted_id},
+                            {'$set': {
+                                'wsp_media': file_data,
+                                #'onedrive': upload_result if isinstance(upload_result, dict) else None,
+                                'status': 'uploaded' if isinstance(upload_result, dict) else 'upload_failed'
+                            }}
+                        )
 
         print(text)
-
-        # wsp_send_message(text, phone)
         wsp_process_message(text, phone)
+        return 'EVENT_RECEIVED'
+    except Exception as e:
+        print(f"Error en wsp_received_message: {e}")
+        return 'EVENT_RECEIVED'
 
-        return 'EVENT_RECEIVED'
-    except:
-        return 'EVENT_RECEIVED'
+
+def graph_acquire_token():
+    """Obtiene token de Microsoft Graph (client credentials)."""
+    tenant_id = os.getenv('GRAPH_TENANT_ID')
+    client_id = os.getenv('GRAPH_CLIENT_ID')
+    client_secret = os.getenv('GRAPH_CLIENT_SECRET')
+    if not all([tenant_id, client_id, client_secret]):
+        print('GRAPH env vars missing')
+        return None
+    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    data = {
+        'grant_type': 'client_credentials',
+        'client_id': client_id,
+        'client_secret': client_secret,
+        'scope': 'https://graph.microsoft.com/.default'
+    }
+    try:
+        r = requests.post(url, data=data, timeout=30)
+        r.raise_for_status()
+        j = r.json()
+        return j.get('access_token')
+    except Exception as e:
+        print(f'Error acquiring Graph token: {e}')
+        return None
+
+
+def graph_upload_small_file(token: str, onedrive_user: str, upload_folder: str, filename: str, content: bytes, mime_type: str):
+    """
+    Sube un archivo <=4MB a OneDrive: PUT /content.
+    upload_folder: ruta relativa dentro de root (puede ser vacía o con subcarpetas tipo Carpeta/Sub).
+    """
+    if not onedrive_user:
+        print('ONEDRIVE_USER missing')
+        return None
+    # Asegurar ruta y codificar espacios
+    folder_path = upload_folder.strip('/') if upload_folder else ''
+    if folder_path:
+        path = f"{folder_path}/{filename}"
+    else:
+        path = filename
+    # Construir URL
+    url = f"https://graph.microsoft.com/v1.0/users/{onedrive_user}/drive/root:/{path}:/content"
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': mime_type or 'application/octet-stream'
+    }
+    try:
+        resp = requests.put(url, headers=headers, data=content, timeout=120)
+        resp.raise_for_status()
+        return resp.json()  # DriveItem
+    except Exception as e:
+        print(f'Error uploading to OneDrive: {e}')
+        try:
+            print('Response:', resp.text)
+        except Exception:
+            pass
+        return None
+
+
+def guess_extension(mime_type: str) -> str:
+    mapping = {
+        'image/jpeg': '.jpg',
+        'image/png': '.png',
+        'image/gif': '.gif',
+        'application/pdf': '.pdf',
+        'image/webp': '.webp'
+    }
+    return mapping.get(mime_type, '')
 
 
 def wsp_process_message(message: str, phone: str):

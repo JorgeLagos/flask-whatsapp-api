@@ -30,17 +30,20 @@ def send_message(data: dict):
 def get_file(fileId: int):
     try:
         response = requests.get(
-            url = f'{WSP_API_URL}/{WSP_API_VERSION}/{fileId}',
-            headers = {
-                'Content-Type': 'application/json', 
+            url=f'{WSP_API_URL}/{WSP_API_VERSION}/{fileId}',
+            headers={
+                'Content-Type': 'application/json',
                 'Authorization': f'Bearer {WSP_API_TOKEN}'
-            }
+            },
+            timeout=30
         )
-
         if response.status_code == 200:
-            return True, response.text
-        
+            try:
+                return True, response.json()
+            except Exception:
+                # Fallback por si no es JSON parseable
+                return True, {}
         return False, {}
     except Exception as exception:
-        print(exception)
+        print('get_file error:', exception)
         return False, {}
