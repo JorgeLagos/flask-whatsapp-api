@@ -227,8 +227,9 @@ def wsp_received_message():
                         except Exception:
                             pass
 
-        print(text)
+        print(ia_text)
         wsp_process_message(text, phone)
+        
         return 'EVENT_RECEIVED'
     except Exception as e:
         print(f"Error en wsp_received_message: {e}")
