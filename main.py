@@ -54,6 +54,8 @@ def wsp_received_message():
         value = changes.get('value', {})
         messages = (value.get('messages') or [{}])[0]
 
+        print(messages)
+
         typeMsg = messages.get('type')
         phone = messages.get('from')
         text = helpers.get_text_user(messages)
