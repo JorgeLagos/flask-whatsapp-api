@@ -125,13 +125,12 @@ def wsp_received_message():
                         except Exception as e:
                             saia_chat_result = {'error': 'chat_exception', 'detail': str(e)}
 
-                        # Extract assistant text and try to parse JSON inside code fences
-                        saia_text = None
-                        saia_parsed = None
+                        # Extract assistant text from IA response
+                        ia_text = None
                         try:
                             if isinstance(saia_chat_result, dict):
                                 choices = saia_chat_result.get('choices')
-                                if isinstance(choices, list) and len(choices) > 0:
+                                if isinstance(choices, list) and choices:
                                     choice0 = choices[0]
                                     msg = None
                                     if isinstance(choice0, dict):
@@ -139,12 +138,12 @@ def wsp_received_message():
                                     if isinstance(msg, dict):
                                         c = msg.get('content') or msg.get('text')
                                         if isinstance(c, str) and c.strip():
-                                            saia_text = c
+                                            ia_text = c
                                     elif isinstance(msg, str) and msg.strip():
-                                        saia_text = msg
+                                        ia_text = msg
 
                                 # fallback: find first string
-                                if not saia_text:
+                                if not ia_text:
                                     def find_string(o):
                                         if isinstance(o, str):
                                             return o
@@ -161,51 +160,30 @@ def wsp_received_message():
                                                     return s
                                             return None
                                         return None
-                                    saia_text = find_string(saia_chat_result)
-
+                                    ia_text = find_string(saia_chat_result)
                         except Exception:
-                            saia_text = None
+                            ia_text = None
 
-                        # If text is wrapped in triple-backticks and contains JSON, parse it
+                        # Parse IA JSON inside code fences and store parsed object as-is (fields vary)
                         try:
-                            if isinstance(saia_text, str):
-                                # remove leading/trailing whitespace
-                                raw = saia_text.strip()
+                            if isinstance(ia_text, str):
+                                raw = ia_text.strip()
                                 import re, json
                                 m = re.search(r"```(?:json)?\s*(.*?)\s*```", raw, flags=re.DOTALL | re.IGNORECASE)
-                                if m:
-                                    inner = m.group(1).strip()
-                                    try:
-                                        saia_parsed = json.loads(inner)
-                                        # store pretty text too
-                                        saia_text = json.dumps(saia_parsed, ensure_ascii=False, indent=2)
-                                    except Exception:
-                                        # not JSON, just keep inner text
-                                        saia_text = inner
-                                else:
-                                    # try parse raw as JSON if it looks like JSON
-                                    stripped = raw
-                                    if (stripped.startswith('{') or stripped.startswith('[')):
-                                        try:
-                                            saia_parsed = json.loads(stripped)
-                                            saia_text = json.dumps(saia_parsed, ensure_ascii=False, indent=2)
-                                        except Exception:
-                                            saia_text = raw
-                                    else:
-                                        saia_text = raw
-                                # normalize
-                                saia_text = unicodedata.normalize('NFKC', saia_text).strip()
+                                candidate = m.group(1).strip() if m else raw
+                                try:
+                                    parsed = json.loads(candidate)
+                                    # store parsed JSON (dict or list) directly under ia_text
+                                    collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': parsed}})
+                                except Exception:
+                                    # not valid JSON: store cleaned string
+                                    cleaned = unicodedata.normalize('NFKC', candidate).strip()
+                                    collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': cleaned}})
                         except Exception:
-                            pass
-
-                        # Persist only assistant text and parsed object (if any). Do not store upload/chat blobs.
-                        try:
-                            to_set = {'saia_text': saia_text}
-                            if saia_parsed is not None:
-                                to_set['saia_parsed'] = saia_parsed
-                            collection.update_one({'_id': inserted_id}, {'$set': to_set})
-                        except Exception:
-                            pass
+                            try:
+                                collection.update_one({'_id': inserted_id}, {'$set': {'ia_text': ia_text}})
+                            except Exception:
+                                pass
                     else:
                         # SAIA client not configured: record nothing about uploads/chat to keep DB compact
                         saia_upload_result = {'error': 'saia_client_not_configured'}
@@ -229,15 +207,12 @@ def wsp_received_message():
                         )
 
                         # Prepare compact OneDrive metadata: keep only essential fields
-                        # Keep only the OneDrive download URL and attach it to wsp_media
-                        onedrive_meta = None
+                        # Attach OneDrive download_url into wsp_media for downstream usage; do not store separate 'onedrive' field
                         download_url = None
                         if isinstance(upload_result, dict):
                             drive_item = upload_result
                             download_url = drive_item.get('@microsoft.graph.downloadUrl')
-                            onedrive_meta = {'download_url': download_url} if download_url else None
 
-                        # attach download_url into wsp_media for downstream usage
                         try:
                             media = dict(file_data) if isinstance(file_data, dict) else {}
                             if download_url:
@@ -246,7 +221,6 @@ def wsp_received_message():
                                 {'_id': inserted_id},
                                 {'$set': {
                                     'wsp_media': media,
-                                    'onedrive': onedrive_meta,
                                     'status': 'uploaded' if isinstance(upload_result, dict) else 'upload_failed'
                                 }}
                             )
