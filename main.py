@@ -207,11 +207,8 @@ def wsp_received_message():
                         except Exception:
                             pass
                     else:
+                        # SAIA client not configured: record nothing about uploads/chat to keep DB compact
                         saia_upload_result = {'error': 'saia_client_not_configured'}
-                        try:
-                            collection.update_one({'_id': inserted_id}, {'$set': {'saia_upload': saia_upload_result}})
-                        except Exception:
-                            pass
 
                     graph_token = graph_acquire_token()
                     if not graph_token:
