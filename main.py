@@ -34,24 +34,49 @@ def wsp_verify_token():
 def wsp_received_message():
     try:
         body = request.get_json(silent=True) or {}
-        print(body)
+        # print(body)
 
         entry = (body.get('entry') or [{}])[0]
         changes = (entry.get('changes') or [{}])[0]
         value = changes.get('value', {})
         messages = (value.get('messages') or [{}])[0]
+
+        typeMsg = messages.get('type')
         phone = messages.get('from')
 
-        print(messages)
-        print(phone, messages)
-
         text = helpers.get_text_user(messages)
+
+
+
+        # Save jsonDataFile mongo
+        jsonDataFile = None
+        if typeMsg in ['image', 'document']:
+
+            text = typeMsg
+
+            jsonDataFile = messages.get(typeMsg)
+            
+            data = {
+                "phone": phone,
+                "file": jsonDataFile
+            }
+
+            collection = mongo.get_collection('files')
+            collection.insert_one(data)
+
+            wsp_file_id = jsonDataFile.get('id')
+            status, file_data = whatsapp.get_file(wsp_file_id)
+
+
+        print(text)
+
         # wsp_send_message(text, phone)
         wsp_process_message(text, phone)
 
         return 'EVENT_RECEIVED'
     except:
         return 'EVENT_RECEIVED'
+
 
 def wsp_process_message(message: str, phone: str):
     message = message.lower()
@@ -87,6 +112,16 @@ def wsp_process_message(message: str, phone: str):
         
         data = helpers.text_message(agradecimiento, phone)
         listData.extend([data])
+
+
+    elif any(p in message for p in ['image', 'document']):
+        data = helpers.text_message(f'Gracias {primer_nombre} por la información cargada, esta sera procesada y registrada en sistema', phone)
+        data2 = helpers.text_message(f'Espere ⏰ mientras se procesa su documento 📄', phone)
+        # dataLocation = helpers.location_message(phone)
+        listData.extend([data, data2])
+
+
+
 
     elif any(p in message for p in ['agency']):
         data = helpers.text_message('Esta es nuestra agencia', phone)
@@ -137,7 +172,7 @@ def buscar_persona_por_telefono(phone: str):
         if not phone:
             return None
         
-        collection = mongo.get_collection()
+        collection = mongo.get_collection('users')
         if collection is not None:
             # Limpiar el número de teléfono para la búsqueda
             phone_clean = phone.replace('+', '').replace('-', '').replace(' ', '')

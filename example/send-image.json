@@ -1,0 +1,41 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "123158447352433",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550984050",
+              "phone_number_id": "104440495942931"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "KokeLagos"
+                },
+                "wa_id": "56963230969"
+              }
+            ],
+            "messages": [
+              {
+                "from": "56963230969",
+                "id": "wamid.HBgLNTY5NjMyMzA5NjkVAgASGCAwMkU0MzNCNjlCREUwQTUzMDk5QzJBM0IyMEI0OUFCOQA=",
+                "timestamp": "1756929303",
+                "type": "image",
+                "image": {
+                  "mime_type": "image/jpeg",
+                  "sha256": "rnGQom6TtkYDM1m68ODQOo+YCqqhb6wo/sP1ViTx6H8=",
+                  "id": "1649283926451938"
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

@@ -5,7 +5,6 @@ class Config:
     # Configuración de MongoDB - Leer desde variables de entorno
     MONGO_URI = os.getenv('MONGO_URI')
     MONGO_DATABASE = os.getenv('MONGO_DATABASE', 'flask-wsp-api')
-    MONGO_COLLECTION = os.getenv('MONGO_COLLECTION', 'users')
 
 class MongoConnection:
     _instance = None
@@ -27,10 +26,11 @@ class MongoConnection:
                 self._db = None
     def get_database(self):
         return self._db
+    
     def get_collection(self, mongo_collection=None):
         if self._db is not None:
             try:
-                col_name = mongo_collection or Config.MONGO_COLLECTION
+                col_name = mongo_collection
                 collection = self._db[col_name]
                 # Verificar que la colección es accesible haciendo un ping simple
                 collection.find_one()
@@ -41,6 +41,7 @@ class MongoConnection:
         else:
             print("Base de datos no disponible")
             return None
+        
     def close_connection(self):
         if self._client:
             self._client.close()
