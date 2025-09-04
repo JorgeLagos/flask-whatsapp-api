@@ -6,12 +6,25 @@ from config import MongoConnection, Config
 
 from utils import helpers
 from services import whatsapp
+from utils.saia_console import SAIAConsoleClient
 import requests
 
 load_dotenv()
 
 app = Flask(__name__)
 mongo = MongoConnection()
+_saia_client = None
+
+def get_saia_client():
+    global _saia_client
+    if _saia_client is None:
+        token = os.getenv('GEAI_API_TOKEN')
+        org = os.getenv('ORGANIZATION_ID')
+        proj = os.getenv('PROJECT_ID')
+        assistant = os.getenv('ASSISTANT_ID')
+        if token and org and proj and assistant:
+            _saia_client = SAIAConsoleClient(token, org, proj, assistant)
+    return _saia_client
 
 @app.route('/welcome', methods=['GET'])
 def welcome():
@@ -75,13 +88,86 @@ def wsp_received_message():
                     resp = requests.get(media_url, headers=headers, timeout=60)
                     resp.raise_for_status()
                     content_bytes = resp.content
-
-                    # LOGICA PARA ENVIAR ARCHIVO A AGENTE EN GENEXUS (SAIA.CONSOLE)
-
+                    #######################################################
+                    # SAIA flow: subir archivo a SAIA y llamar al chat
                     filename = jsonDataFile.get('filename') if typeMsg == 'document' else None
                     if not filename:
                         ext = guess_extension(mime_type)
                         filename = f"wsp_{file_data.get('id', 'media')}{ext}"
+
+                    # SAIA flow: use utils.saia_console.SAIAConsoleClient when available
+                    alias = os.path.splitext(filename)[0]
+                    saia_folder = os.getenv('SAIA_UPLOAD_FOLDER', 'test1')
+                    saia_upload_result = None
+                    saia_chat_result = None
+
+                    saia_client = get_saia_client()
+                    if saia_client is not None:
+                        try:
+                            saia_upload_result = saia_client.upload_bytes(content_bytes, filename, folder=saia_folder, alias=alias)
+                        except Exception as e:
+                            saia_upload_result = {'error': 'upload_exception', 'detail': str(e)}
+
+                        # persist upload result
+                        try:
+                            collection.update_one({'_id': inserted_id}, {'$set': {'saia_upload': saia_upload_result}})
+                        except Exception:
+                            pass
+
+                        try:
+                            if isinstance(saia_upload_result, dict) and 'error' not in saia_upload_result:
+                                prompt = f"Por favor procesa y extrae la información del archivo: {{file:{alias}}}"
+                                saia_chat_result = saia_client.chat_with_file(prompt, alias)
+                        except Exception as e:
+                            saia_chat_result = {'error': 'chat_exception', 'detail': str(e)}
+
+                        # extract readable text if present
+                        saia_text = None
+                        try:
+                            if isinstance(saia_chat_result, dict):
+                                # try common shapes: {'message': '...'} or raw dict
+                                if 'message' in saia_chat_result and isinstance(saia_chat_result.get('message'), str):
+                                    saia_text = saia_chat_result.get('message')
+                                else:
+                                    # fallback: stringify a likely textual field
+                                    # prioritize 'answer', 'text', or join first strings
+                                    for key in ('answer', 'text'):
+                                        v = saia_chat_result.get(key)
+                                        if isinstance(v, str) and v.strip():
+                                            saia_text = v
+                                            break
+                                    if saia_text is None:
+                                        # try to find a string inside the nested response
+                                        def find_string(o):
+                                            if isinstance(o, str):
+                                                return o
+                                            if isinstance(o, list):
+                                                for vv in o:
+                                                    s = find_string(vv)
+                                                    if s:
+                                                        return s
+                                                return None
+                                            if isinstance(o, dict):
+                                                for vv in o.values():
+                                                    s = find_string(vv)
+                                                    if s:
+                                                        return s
+                                                return None
+                                            return None
+                                        saia_text = find_string(saia_chat_result)
+                        except Exception:
+                            saia_text = None
+
+                        try:
+                            collection.update_one({'_id': inserted_id}, {'$set': {'saia_chat': saia_chat_result, 'saia_text': saia_text}})
+                        except Exception:
+                            pass
+                    else:
+                        saia_upload_result = {'error': 'saia_client_not_configured'}
+                        try:
+                            collection.update_one({'_id': inserted_id}, {'$set': {'saia_upload': saia_upload_result}})
+                        except Exception:
+                            pass
 
                     graph_token = graph_acquire_token()
                     if not graph_token:
@@ -101,11 +187,24 @@ def wsp_received_message():
                             mime_type or 'application/octet-stream'
                         )
 
+                        # Prepare onedrive metadata: include download url and create a share link
+                        onedrive_meta = None
+                        if isinstance(upload_result, dict):
+                            download_url = upload_result.get('@microsoft.graph.downloadUrl')
+                            drive_item = upload_result
+                            # Try to create a shareable link (anonymous view). If tenant blocks anonymous links, this will fail.
+                            share_link = graph_create_share_link(graph_token, onedrive_user, drive_item.get('id'))
+                            onedrive_meta = {
+                                'drive_item': drive_item,
+                                'download_url': download_url,
+                                'share_link': share_link
+                            }
+
                         collection.update_one(
                             {'_id': inserted_id},
                             {'$set': {
                                 'wsp_media': file_data,
-                                #'onedrive': upload_result if isinstance(upload_result, dict) else None,
+                                'onedrive': onedrive_meta,
                                 'status': 'uploaded' if isinstance(upload_result, dict) else 'upload_failed'
                             }}
                         )
@@ -171,6 +270,37 @@ def graph_upload_small_file(token: str, onedrive_user: str, upload_folder: str, 
         print(f'Error uploading to OneDrive: {e}')
         try:
             print('Response:', resp.text)
+        except Exception:
+            pass
+        return None
+
+
+def graph_create_share_link(token: str, onedrive_user: str, item_id: str, link_type: str = 'view', scope: str = 'anonymous'):
+    """
+    Crea un link compartido para un DriveItem usando createLink.
+    Devuelve el objeto link o None.
+    """
+    if not token or not onedrive_user or not item_id:
+        return None
+    url = f"https://graph.microsoft.com/v1.0/users/{onedrive_user}/drive/items/{item_id}/createLink"
+    payload = {
+        'type': link_type,
+        'scope': scope
+    }
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json'
+    }
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=30)
+        r.raise_for_status()
+        j = r.json()
+        # j contiene { "link": { "webUrl": "...", ... }, ... }
+        return j.get('link')
+    except Exception as e:
+        print(f'Error creating share link: {e}')
+        try:
+            print('Response:', r.text)
         except Exception:
             pass
         return None
